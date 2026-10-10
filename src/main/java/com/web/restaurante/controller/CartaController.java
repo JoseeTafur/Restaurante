@@ -1,18 +1,12 @@
 package com.web.restaurante.controller;
 
-import com.web.restaurante.model.InsumoProducto;
-import com.web.restaurante.model.PagoDigital;
-import com.web.restaurante.model.Pedido;
-import com.web.restaurante.model.Producto;
+import com.web.restaurante.model.*;
 import com.web.restaurante.model.enums.EstadoPedido;
 import com.web.restaurante.repository.CategoriaRepository;
 import com.web.restaurante.repository.InsumoProductoRepository;
 import com.web.restaurante.repository.PagoDigitalRepository;
 import com.web.restaurante.repository.ProductoRepository;
-import com.web.restaurante.service.GroqService;
-import com.web.restaurante.service.PedidoService;
-import com.web.restaurante.service.OCRService;
-import com.web.restaurante.service.CloudinaryService;
+import com.web.restaurante.service.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -31,28 +25,19 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class CartaController {
 
-    private final ProductoRepository productoRepository;
-    private final CategoriaRepository categoriaRepository;
+
     private final PedidoService pedidoService;
-    private final InsumoProductoRepository insumoProductoRepository;
-    private final OCRService ocrService;
-    private final PagoDigitalRepository pagoDigitalRepository;
     private final CloudinaryService cloudinaryService;
     private final GroqService groqService;
+    private final CartaService cartaService;
 
     @GetMapping("/carta")
     public String verCarta(Model model) {
-        List<Producto> listaProductos = productoRepository.findByEstado(1);
-        Map<Long, Boolean> productosAgotados = new HashMap<>();
 
-        for (Producto p : listaProductos) {
-            boolean agotado = insumoProductoRepository.findByProductoId(p.getId()).stream()
-                    .anyMatch(ip -> ip.getInsumo() != null && "PROTEINA".equalsIgnoreCase(ip.getInsumo().getCategoria())
-                            && (ip.getInsumo().getStockActual() != null ? ip.getInsumo().getStockActual() : 0.0) < (ip.getCantidadUsada() != null ? ip.getCantidadUsada() : 0.0));
-            productosAgotados.put(p.getId(), agotado);
-        }
+        Map<Long, Boolean> productosAgotados = cartaService.productosAgotados();
+        List<Producto> listaProductos = cartaService.productos();
 
-        model.addAttribute("categorias", categoriaRepository.findAll());
+        model.addAttribute("categorias", cartaService.categoria());
         model.addAttribute("productos", listaProductos);
         model.addAttribute("productosAgotados", productosAgotados);
         return "entregas/carta";
@@ -62,31 +47,9 @@ public class CartaController {
     @Transactional
     public ResponseEntity<?> recibirPedidoCarta(@RequestPart("pedido") Pedido pedido) {
         try {
-            String metodo = pedido.getMetodoPago() != null ? pedido.getMetodoPago().name() : "EFECTIVO";
-            pedido.setEstado(com.web.restaurante.model.enums.EstadoPedido.PENDIENTE);
-            pedido.setEstadoPago(com.web.restaurante.model.enums.EstadoPago.PENDIENTE);
+            Long idPedido = cartaService.recibirPedidoCarta(pedido);
 
-            pedido.setFechaCreacion(java.time.LocalDateTime.now());
-            pedido.setTicketImpresoCocina(false);
-
-            Long idPedido = pedidoService.guardarPedidoCarta(pedido);
-            Pedido pedidoGuardado = pedidoService.obtenerPorId(idPedido);
-
-            if ("YAPE".equalsIgnoreCase(metodo) || "PLIN".equalsIgnoreCase(metodo) || "TRANSFERENCIA".equalsIgnoreCase(metodo)) {
-                PagoDigital pagoDigital = new PagoDigital();
-                pagoDigital.setPedido(pedidoGuardado);
-                pagoDigital.setFechaPago(java.time.LocalDateTime.now());
-
-                pagoDigital.setSituacion(com.web.restaurante.model.enums.SituacionPagoDigital.PENDIENTE);
-
-                pagoDigital.setObservacion("Voucher en espera de confirmación de cajero.");
-
-                pagoDigital.setImgUrl(pedido.getTextoVoucherCrudo());
-
-                pagoDigitalRepository.save(pagoDigital);
-            }
-
-            return ResponseEntity.ok(Map.of("success", true, "id", pedidoGuardado.getId()));
+            return ResponseEntity.ok(Map.of("success", true, "id", idPedido));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("success", false, "message", e.getMessage()));
         }

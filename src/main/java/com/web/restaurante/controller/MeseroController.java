@@ -28,14 +28,9 @@ import java.util.Map;
 @Controller
 @RequestMapping("/admin/mesero")
 @RequiredArgsConstructor
-public class MeseroController {
+public class  MeseroController {
 
-    private final ProductoRepository productoRepository;
     private final PedidoService pedidoService;
-    private final MesaRepository mesaRepository;
-    private final PedidoRepository pedidoRepository;
-    private final InsumoProductoRepository insumoProductoRepository;
-    private final TurnoCajaService turnoCajaService;
 
     @GetMapping("/nuevo")
     public String nuevoPedido(Model model, HttpSession session,
@@ -49,7 +44,7 @@ public class MeseroController {
             try {
                 pedidoIdCorrecto = Long.parseLong(pedidoId.trim());
             } catch (NumberFormatException e) {
-                System.out.println("⚠️ [COMANDERA] Formato de comanda corrupto interceptado: " + pedidoId);
+                System.out.println("Formato de comanda corrupto interceptado: " + pedidoId);
             }
         }
 
@@ -60,26 +55,8 @@ public class MeseroController {
             return "redirect:/admin/mesas";
         }
 
-        List<Producto> listaProductos = productoRepository.findAll();
-        Map<Long, Boolean> productosAgotados = new HashMap<>();
-
-        for (Producto p : listaProductos) {
-            boolean agotado = false;
-            List<InsumoProducto> receta = insumoProductoRepository.findByProductoId(p.getId());
-
-            for (InsumoProducto ip : receta) {
-                if (ip.getInsumo() != null && "PROTEINA".equalsIgnoreCase(ip.getInsumo().getCategoria())) {
-                    double stockDisponibleReal = ip.getInsumo().getStockDisponible() != null ? ip.getInsumo().getStockDisponible() : 0.0;
-                    double cantidadRequerida = ip.getCantidadUsada() != null ? ip.getCantidadUsada() : 0.0;
-
-                    if (stockDisponibleReal < cantidadRequerida) {
-                        agotado = true;
-                        break;
-                    }
-                }
-            }
-            productosAgotados.put(p.getId(), agotado);
-        }
+        Map<Long, Boolean> productosAgotados = pedidoService.productosAgotados(mesaId, pedidoId);
+        List<Producto> listaProductos = pedidoService.listaProductos();
 
         model.addAttribute("productos", listaProductos);
         model.addAttribute("productosAgotados", productosAgotados);
@@ -98,108 +75,7 @@ public class MeseroController {
                                 @RequestParam(required = false) Long mesaId,
                                 HttpSession session) {
         try {
-            System.out.println("\n===== [DEBUG RESTAURANTE: INICIO GUARDAR COMANDA] =====");
-            Pedido pedidoFinal;
-
-            if (pedidoDeFrontend.getId() != null) {
-                pedidoFinal = pedidoRepository.findById(pedidoDeFrontend.getId())
-                        .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
-
-                pedidoFinal.setEstado(EstadoPedido.EN_COCINA);
-                pedidoFinal.setEstadoPago(EstadoPago.PENDIENTE);
-                pedidoFinal.setCliente(pedidoDeFrontend.getCliente());
-                pedidoFinal.setDireccion(pedidoDeFrontend.getDireccion());
-
-                if (pedidoDeFrontend.getListaDetalles() != null) {
-                    for (DetallePedido nuevoDetalle : pedidoDeFrontend.getListaDetalles()) {
-                        Producto productoCompleto = productoRepository.findById(nuevoDetalle.getProducto().getId())
-                                .orElseThrow(() -> new RuntimeException("Producto no encontrado con ID: " + nuevoDetalle.getProducto().getId()));
-
-                        nuevoDetalle.setProducto(productoCompleto);
-                        nuevoDetalle.setPedido(pedidoFinal);
-                        nuevoDetalle.setCocinado(false);
-
-                        pedidoFinal.getListaDetalles().add(nuevoDetalle);
-                    }
-                }
-
-            } else {
-                pedidoFinal = pedidoDeFrontend;
-                pedidoFinal.setEstado(EstadoPedido.EN_COCINA);
-                pedidoFinal.setEstadoPago(com.web.restaurante.model.enums.EstadoPago.PENDIENTE);
-                pedidoFinal.setFechaCreacion(LocalDateTime.now());
-                pedidoFinal.setFechaSalida(null);
-                pedidoFinal.setFechaEntrega(null);
-
-                if (pedidoFinal.getListaDetalles() != null) {
-                    for (DetallePedido d : pedidoFinal.getListaDetalles()) {
-                        Producto productoCompleto = productoRepository.findById(d.getProducto().getId())
-                                .orElseThrow(() -> new RuntimeException("Producto no encontrado"));
-                        d.setProducto(productoCompleto);
-                        d.setCocinado(false);
-                    }
-                }
-            }
-
-            if (pedidoFinal.getTurnoCaja() == null) {
-                turnoCajaService.obtenerTurnoActivo().ifPresent(pedidoFinal::setTurnoCaja);
-            }
-
-            if (mesaId != null) {
-                Mesa mesa = mesaRepository.findById(mesaId).orElseThrow();
-                pedidoFinal.setNumeroMesa(mesa.getNumero());
-                mesa.setEstado("OCUPADA");
-                mesaRepository.save(mesa);
-            }
-
-            boolean hayFrioPendiente = false;
-            boolean hayCalientePendiente = false;
-
-            if (pedidoFinal.getListaDetalles() != null) {
-                for (DetallePedido d : pedidoFinal.getListaDetalles()) {
-                    if (d.getProducto() != null && d.getProducto().getCategoria() != null) {
-                        String cat = d.getProducto().getCategoria().getNombre().toUpperCase();
-                        if ((cat.contains("FRI") || cat.contains("FRÍ")) && !d.isCocinado()) {
-                            hayFrioPendiente = true;
-                        }
-                        if (cat.contains("CALIENTE") && !d.isCocinado()) {
-                            hayCalientePendiente = true;
-                        }
-                    }
-                }
-            }
-
-            pedidoFinal.setFrioListo(!hayFrioPendiente);
-            pedidoFinal.setCalienteListo(!hayCalientePendiente);
-
-            if (!hayFrioPendiente && !hayCalientePendiente) {
-                if (pedidoFinal.getFechaSalida() == null) {
-                    pedidoFinal.setFechaSalida(LocalDateTime.now());
-                }
-            } else {
-                pedidoFinal.setFechaSalida(null);
-            }
-
-            double totalAcumulado = 0;
-            if (pedidoFinal.getListaDetalles() != null) {
-                for (DetallePedido detalle : pedidoFinal.getListaDetalles()) {
-                    detalle.setPedido(pedidoFinal);
-                    if (detalle.getPrecioUnitario() == null && detalle.getProducto() != null) {
-                        detalle.setPrecioUnitario(detalle.getProducto().getPrecio());
-                    }
-                    totalAcumulado += detalle.getSubtotal();
-                }
-            }
-            pedidoFinal.setMontoTotal(totalAcumulado);
-
-            pedidoService.guardarPedido(pedidoFinal);
-
-            if (pedidoFinal.getId() != null) {
-                Pedido pedidoSeguro = pedidoRepository.findById(pedidoFinal.getId()).orElse(pedidoFinal);
-                turnoCajaService.obtenerTurnoActivo().ifPresent(pedidoSeguro::setTurnoCaja);
-                pedidoRepository.save(pedidoSeguro);
-            }
-
+            pedidoService.guardarPedido(pedidoDeFrontend, mesaId);
             return "OK";
         } catch (Exception e) {
             e.printStackTrace();
@@ -222,17 +98,7 @@ public class MeseroController {
     @ResponseBody
     public ResponseEntity<String> marcarPedidoEnMesa(@PathVariable Long id) {
         try {
-            Pedido pedido = pedidoRepository.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
-
-            pedido.setFechaSalida(LocalDateTime.now());
-            pedido.setEstado(EstadoPedido.ASIGNADO);
-
-            if (pedido.getTurnoCaja() == null) {
-                turnoCajaService.obtenerTurnoActivo().ifPresent(pedido::setTurnoCaja);
-            }
-
-            pedidoRepository.save(pedido);
+            pedidoService.marcarPedidoEnMesa(id);
             return ResponseEntity.ok("OK");
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error: " + e.getMessage());
@@ -244,26 +110,7 @@ public class MeseroController {
     public ResponseEntity<String> finalizarPedidoLocal(@PathVariable Long id,
                                                        @RequestParam(required = false) Long mesaId) {
         try {
-            Pedido pedido = pedidoRepository.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
-
-            pedido.setEstado(EstadoPedido.ENTREGADO);
-            pedido.setFechaEntrega(LocalDateTime.now());
-
-            if (pedido.getTurnoCaja() == null) {
-                turnoCajaService.obtenerTurnoActivo().ifPresent(pedido::setTurnoCaja);
-            }
-
-            if (EstadoPago.PAGADO.equals(pedido.getEstadoPago())) {
-                pedido.setNumeroMesa(null);
-                if (mesaId != null) {
-                    Mesa mesa = mesaRepository.findById(mesaId).orElseThrow();
-                    mesa.setEstado("DISPONIBLE");
-                    mesaRepository.save(mesa);
-                }
-            }
-
-            pedidoRepository.save(pedido);
+            pedidoService.finalizarPedidoLocal(id, mesaId);
             return ResponseEntity.ok("OK");
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error: " + e.getMessage());
@@ -274,16 +121,7 @@ public class MeseroController {
     @ResponseBody
     public ResponseEntity<String> prepararCuenta(@PathVariable Long id) {
         try {
-            Pedido pedido = pedidoRepository.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
-
-            pedido.setEstado(EstadoPedido.PREPARADO);
-
-            if (pedido.getTurnoCaja() == null) {
-                turnoCajaService.obtenerTurnoActivo().ifPresent(pedido::setTurnoCaja);
-            }
-
-            pedidoRepository.save(pedido);
+            pedidoService.prepararCuenta(id);
             return ResponseEntity.ok("OK");
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Error: " + e.getMessage());
